@@ -1,0 +1,7 @@
+{
+  "name": "MS Hokej Integration",
+  "content_in_root": false,
+  "render_readme": true,
+  "country": ["CZ"],
+  "homeassistant": "2024.8.0"
+}
