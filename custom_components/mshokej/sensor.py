@@ -10,8 +10,29 @@ from .const import (
     ATTR_SNAPSHOT,
     ATTR_UPDATED_MATCHES,
     ATTR_WARNINGS,
+    DEFAULT_IDLE_POLL_INTERVAL,
+    DEFAULT_LIVE_POLL_INTERVAL,
+    DEFAULT_PRE_MATCH_BUFFER,
     DOMAIN,
 )
+
+
+def _refresh_description():
+    return (
+        f"LIVE zapas -> refresh kazdych {DEFAULT_LIVE_POLL_INTERVAL} s; "
+        f"pred dalsim zapasem probuzeni {DEFAULT_PRE_MATCH_BUFFER} s pred startem; "
+        f"kdyz nic nebezi ani se nechysta -> refresh 1x za {DEFAULT_IDLE_POLL_INTERVAL // 3600} hodinu; "
+        f"po chybe retry za {DEFAULT_LIVE_POLL_INTERVAL} s."
+    )
+
+
+def _refresh_intervals():
+    return {
+        "live_poll_seconds": DEFAULT_LIVE_POLL_INTERVAL,
+        "pre_match_buffer_seconds": DEFAULT_PRE_MATCH_BUFFER,
+        "idle_poll_seconds": DEFAULT_IDLE_POLL_INTERVAL,
+        "retry_after_error_seconds": DEFAULT_LIVE_POLL_INTERVAL,
+    }
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -56,6 +77,8 @@ class SnapshotSensor(BaseMSHokejSensor):
             ATTR_REFRESH_PLAN: self.coordinator.data.get(ATTR_REFRESH_PLAN),
             ATTR_UPDATED_MATCHES: self.coordinator.data.get(ATTR_UPDATED_MATCHES, []),
             ATTR_WARNINGS: self.coordinator.data.get(ATTR_WARNINGS, []),
+            "description": _refresh_description(),
+            "refresh_intervals": _refresh_intervals(),
             "last_error": self.coordinator.data.get("last_error"),
         }
 
@@ -127,4 +150,8 @@ class RefreshModeSensor(BaseMSHokejSensor):
 
     @property
     def extra_state_attributes(self):
-        return self.coordinator.data.get(ATTR_REFRESH_PLAN, {})
+        return {
+            **self.coordinator.data.get(ATTR_REFRESH_PLAN, {}),
+            "description": _refresh_description(),
+            "refresh_intervals": _refresh_intervals(),
+        }

@@ -20,6 +20,9 @@ HACS-ready Home Assistant custom integration for the MS hockey project.
 - `sensor.ms_hokej_refresh_mode`
 - `button.ms_hokej_refresh`
 
+`sensor.ms_hokej_snapshot` a `sensor.ms_hokej_refresh_mode` navic obsahuji v atributech
+kratky popis refresh logiky a konkretni intervaly.
+
 ## Install locally
 
 1. Copy `custom_components\mshokej` into your Home Assistant `config\custom_components\`.
