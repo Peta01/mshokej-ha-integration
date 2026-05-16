@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Web scraping skript pro stažení výsledků zápasů z livesport.cz
-Vrací JSON se seznamem zápasů s výsledky.
+Web scraping skript pro stazeni vysledku zapasu z livesport.cz
+Vraci JSON se seznamem zapasu s vysledky.
 """
 
 import json
@@ -14,15 +14,20 @@ import requests
 
 URL = "https://www.livesport.cz/hokej/svet/mistrovstvi-sveta/live-tabulka/"
 
-# Mapování názvů týmů z livesport.cz na kódy v MS 2026
 TEAM_MAPPING = {
     "kanada": "CAN",
-    "finsko": "FIN", "finska": "FIN",
-    "nemecko": "GER", "německo": "GER", "německá": "GER",
+    "finsko": "FIN",
+    "finska": "FIN",
+    "nemecko": "GER",
+    "německo": "GER",
+    "německá": "GER",
     "usa": "USA",
-    "švýcarsko": "SUI", "schweiz": "SUI",
+    "švýcarsko": "SUI",
+    "schweiz": "SUI",
     "svycarsko": "SUI",
-    "británie": "GBR", "velká británie": "GBR", "anglie": "GBR",
+    "británie": "GBR",
+    "velká británie": "GBR",
+    "anglie": "GBR",
     "velka britanie": "GBR",
     "rakousko": "AUT",
     "maďarsko": "HUN",
@@ -30,10 +35,12 @@ TEAM_MAPPING = {
     "lotyssko": "LAT",
     "francie": "FRA",
     "itálie": "ITA",
-    "dánsko": "DEN", "dansko": "DEN",
+    "dánsko": "DEN",
+    "dansko": "DEN",
     "slovinsko": "SLO",
     "slovensko": "SVK",
-    "česko": "CZE", "česká": "CZE",
+    "česko": "CZE",
+    "česká": "CZE",
     "cesko": "CZE",
     "norsko": "NOR",
     "rusko": "RUS",
@@ -45,8 +52,8 @@ TEAM_MAPPING = {
 
 def parse_tl_live_feed_events(feed_text: str) -> List[Dict[str, str]]:
     """Vyparsuje tl_* feed na seznam radku oddelenych klicem TR."""
-    item_separator = chr(172)  # '¬'
-    key_separator = chr(247)   # '÷'
+    item_separator = chr(172)
+    key_separator = chr(247)
     events: List[Dict[str, str]] = []
     current: Optional[Dict[str, str]] = None
 
@@ -77,10 +84,8 @@ def infer_live_period_from_tl_row(row: Dict[str, str]) -> Optional[str]:
     if period in {"1", "2", "3"}:
         return f"{period}T"
 
-    # Fallback: nektere varianty feedu posilaji periodu textove (napr. "2. třetina").
     joined_text = " ".join(
-        _strip_bbcode((row.get(key) or "").strip())
-        for key in ("LST", "LT", "LU", "LN", "LO", "LV", "LX")
+        _strip_bbcode((row.get(key) or "").strip()) for key in ("LST", "LT", "LU", "LN", "LO", "LV", "LX")
     )
     period_match = re.search(r"\b([123])\.\s*t[řr]etina\b", joined_text, flags=re.IGNORECASE)
     if period_match:
@@ -93,12 +98,10 @@ def _extract_clock(text: str) -> Optional[str]:
     if not text:
         return None
 
-    # Prioritne bereme presny mm:ss format.
     match = re.search(r"\b(\d{1,2}:\d{2})\b", text)
     if match:
         return match.group(1)
 
-    # Fallback pro sportovni feedy typu "4'" (minuta hry).
     minute_match = re.search(r"\b(\d{1,2}')\b", text)
     if minute_match:
         return minute_match.group(1)
@@ -116,14 +119,17 @@ def _strip_bbcode(text: str) -> str:
 def infer_live_details_from_tl_row(row: Dict[str, str]) -> tuple[Optional[str], Optional[str]]:
     """Vraci (live_clock, live_status) z tl_* radku."""
     lst_text = _strip_bbcode(row.get("LST") or "")
-    if "konec" in lst_text.lower():
+    lst_lower = lst_text.lower()
+
+    if "konec" in lst_lower:
         return None, "Konec"
+    if "přestáv" in lst_lower or "prestav" in lst_lower:
+        return None, "Přestávka"
 
     ib_clock = _extract_clock((row.get("IB") or "").strip())
     if ib_clock:
         return ib_clock.split(":", 1)[0], None
 
-    # Potencialni pole s casem v nekterych variantach feedu.
     for key in ("LT", "LU", "LN", "LO", "LV", "LX"):
         clock = _extract_clock((row.get(key) or "").strip())
         if clock:
@@ -132,10 +138,6 @@ def infer_live_details_from_tl_row(row: Dict[str, str]) -> tuple[Optional[str], 
     clock = _extract_clock(lst_text)
     if clock:
         return clock.split(":", 1)[0], None
-
-    # LC=3 u hokeje typicky odpovida prestavce mezi tretinami.
-    if (row.get("LC") or "").strip() == "3":
-        return None, "Přestávka"
 
     return None, None
 
@@ -149,8 +151,90 @@ def _period_label_to_code(label: str) -> Optional[str]:
     return None
 
 
+def _extract_window_environment(page_html: str) -> Optional[Dict]:
+    marker = "window.environment = "
+    start = page_html.find(marker)
+    if start == -1:
+        return None
+
+    json_start = page_html.find("{", start)
+    if json_start == -1:
+        return None
+
+    depth = 0
+    json_end = -1
+    for idx in range(json_start, len(page_html)):
+        char = page_html[idx]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                json_end = idx
+                break
+
+    if json_end == -1:
+        return None
+
+    try:
+        return json.loads(page_html[json_start : json_end + 1])
+    except json.JSONDecodeError:
+        return None
+
+
+def fetch_live_minute_from_match_page(
+    home_team_id: str,
+    away_team_id: str,
+    team_slug_map: Dict[str, str],
+    headers: Dict[str, str],
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Vraci (live_period, live_clock, live_status) z detail stranky zapasu."""
+    home_slug = (team_slug_map.get(home_team_id) or "").strip()
+    away_slug = (team_slug_map.get(away_team_id) or "").strip()
+    if not home_slug or not away_slug:
+        return None, None, None
+
+    match_url = f"https://www.livesport.cz/zapas/hokej/{away_slug}-{away_team_id}/{home_slug}-{home_team_id}/"
+    page_headers = {"User-Agent": headers.get("User-Agent", "Mozilla/5.0")}
+
+    try:
+        response = requests.get(match_url, headers=page_headers, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException:
+        return None, None, None
+
+    env = _extract_window_environment(response.text)
+    if not env:
+        return None, None, None
+
+    stage_id = env.get("eventStageId")
+    stage_to_period = {14: "1T", 15: "2T", 16: "3T"}
+    live_period = stage_to_period.get(stage_id)
+
+    live_status = None
+    if stage_id == 46:
+        live_status = "Přestávka"
+    elif stage_id == 3:
+        live_status = "Konec"
+
+    live_clock = None
+    common_feed = env.get("common_feed") or []
+    for item in common_feed:
+        if not isinstance(item, dict) or "DI" not in item:
+            continue
+        try:
+            minute = int(item["DI"])
+        except (TypeError, ValueError):
+            continue
+        if minute >= 0:
+            live_clock = f"{minute}'"
+        break
+
+    return live_period, live_clock, live_status
+
+
 def fetch_live_details_from_match_feed(event_id: str, headers: Dict[str, str]) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """Fallback na detailni df_sui_1_<eventId> feed pro periodu a orientacni cas."""
+    """Fallback na detailni df_sui_1_<eventId> feed pro periodu."""
     detail_url = f"https://1.flashscore.ninja/1/x/feed/df_sui_1_{event_id}"
 
     try:
@@ -160,12 +244,10 @@ def fetch_live_details_from_match_feed(event_id: str, headers: Dict[str, str]) -
         return None, None, None
 
     feed_text = response.text
-    item_separator = chr(172)  # '¬'
-    key_separator = chr(247)   # '÷'
+    item_separator = chr(172)
+    key_separator = chr(247)
 
-    current_period_label: Optional[str] = None
     latest_period_label: Optional[str] = None
-    last_clock: Optional[str] = None  # Poslední čas v mm:ss
 
     for token in feed_text.split(item_separator):
         if key_separator not in token:
@@ -176,27 +258,32 @@ def fetch_live_details_from_match_feed(event_id: str, headers: Dict[str, str]) -
         value = value.strip()
 
         if key == "AC":
-            current_period_label = value
             latest_period_label = value
-            continue
-
-        # IB = čas poslední akce v mm:ss - to je čas v třetině!
-        if key == "IB" and re.match(r"^\d{1,2}:\d{2}$", value):
-            last_clock = value
-            continue
 
     period_code = _period_label_to_code(latest_period_label or "")
-    clock = None
-    if last_clock:
-        try:
-            minutes_str, seconds_str = last_clock.split(":", 1)
-            minutes = int(minutes_str)
-            seconds = int(seconds_str)
-            clock = str(minutes + (1 if seconds > 0 else 0))
-        except (ValueError, IndexError):
-            clock = None
+    return period_code, None, None
 
-    return period_code, clock, None
+
+def normalize_tl_score_to_home_away(row: Dict[str, str], score_left: int, score_right: int) -> tuple[int, int]:
+    """Prevede skore z tl_* radku na poradi home:away."""
+    home_team_id = row.get("LSH")
+    away_team_id = row.get("LSA")
+    row_team_id = row.get("TI") or row.get("LMH")
+
+    if row_team_id and home_team_id and away_team_id:
+        if row_team_id == home_team_id:
+            return score_left, score_right
+        if row_team_id == away_team_id:
+            return score_right, score_left
+
+    lst_text = row.get("LST") or ""
+    lst_score_match = re.search(r"\[b\](\d+:\d+)\[/b]", lst_text)
+    if lst_score_match:
+        lst_home, lst_away = parse_score(lst_score_match.group(1))
+        if lst_home is not None and lst_away is not None:
+            return lst_home, lst_away
+
+    return score_left, score_right
 
 
 def extract_tournament_ids(page_html: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
@@ -232,7 +319,6 @@ def fetch_live_table_matches(page_html: str, headers: Dict[str, str]) -> List[Di
 
     tl_feed = tl_response.text
 
-    # Mapovani team internal id -> slug (cesko, svycarsko, ...)
     team_slug_map: Dict[str, str] = {}
     slug_map_match = re.search(r'~PIU÷(\{.*?\})(?:¬|$)', tl_feed)
     if slug_map_match:
@@ -260,6 +346,8 @@ def fetch_live_table_matches(page_html: str, headers: Dict[str, str]) -> List[Di
         if not home_team_id or not away_team_id:
             continue
 
+        score_home, score_away = normalize_tl_score_to_home_away(row, score_home, score_away)
+
         home_slug = (team_slug_map.get(home_team_id) or "").replace("-", " ")
         away_slug = (team_slug_map.get(away_team_id) or "").replace("-", " ")
         home_code = normalize_team_name(home_slug)
@@ -279,19 +367,29 @@ def fetch_live_table_matches(page_html: str, headers: Dict[str, str]) -> List[Di
         live_period = infer_live_period_from_tl_row(row)
         live_clock, live_status = infer_live_details_from_tl_row(row)
 
-        # Fallback: tl feed byva zpozdeny, takze VZDY ziskejme cas z detail feedu pro LIVE zapasy.
-        # 1) Kdyz perioda chybi uplne, doplnime ji z detail feedu.
-        # 2) VZDY se pokusime ziskat nejnovejsi cas z detail feedu (ten je presnejsi).
-        # 3) Kdyz tl tvrdi "Prestavka", overime detail feed; pokud uz bezi dalsi tretina, prepneme periodu.
-        need_detail_fallback = live_period is None or live_clock is None or (live_status == "Přestávka")
+        page_period, page_clock, page_status = fetch_live_minute_from_match_page(
+            home_team_id,
+            away_team_id,
+            team_slug_map,
+            headers,
+        )
+        has_authoritative_status = page_status in {"Přestávka", "Konec"}
+        if page_period:
+            live_period = page_period
+        if page_clock:
+            live_clock = page_clock
+        if page_status:
+            live_status = page_status
+
+        need_detail_fallback = (
+            (live_period is None or live_clock is None or (live_status == "Přestávka")) and not has_authoritative_status
+        )
         if event_id and need_detail_fallback:
             period_before = live_period
             detail_period, detail_clock, detail_status = fetch_live_details_from_match_feed(event_id, tl_headers)
             if detail_period:
                 live_period = detail_period
 
-            # Pokud tl feed stale drzi Prestavku, ale detail uz ukazuje jinou tretinu,
-            # povazujeme to za stale status a odstranime ho.
             if (
                 live_status == "Přestávka"
                 and period_before
@@ -327,7 +425,7 @@ def fetch_live_table_matches(page_html: str, headers: Dict[str, str]) -> List[Di
 
 
 def normalize_team_name(name: str) -> str:
-    """Normalizuje název týmu na kód země."""
+    """Normalizuje nazev tymu na kod zeme."""
     name_lower = name.lower().strip()
     for key, code in TEAM_MAPPING.items():
         if key in name_lower:
@@ -350,11 +448,10 @@ def detect_match_type(score_text: str) -> str:
     """Detekuje typ zapasu (REG, OT, SO) z textu."""
     score_text_lower = score_text.lower()
     if "so" in score_text_lower or "sn" in score_text_lower:
-        return "SO"  # Nájezdy
-    elif "ot" in score_text_lower or "pp" in score_text_lower:
-        return "OT"  # Prodloužení
-    else:
-        return "REG"  # Bezna doba
+        return "SO"
+    if "ot" in score_text_lower or "pp" in score_text_lower:
+        return "OT"
+    return "REG"
 
 
 def parse_feed_events(page_html: str, feed_name: str) -> List[Dict[str, str]]:
@@ -366,8 +463,8 @@ def parse_feed_events(page_html: str, feed_name: str) -> List[Dict[str, str]]:
         return []
 
     feed = match.group(1)
-    item_separator = chr(172)  # '¬'
-    key_separator = chr(247)   # '÷'
+    item_separator = chr(172)
+    key_separator = chr(247)
     events: List[Dict[str, str]] = []
     current: Optional[Dict[str, str]] = None
 
@@ -407,10 +504,7 @@ def parse_match_type_from_periods(event: Dict[str, str], score_home: int, score_
     if (regulation_home, regulation_away) == (score_home, score_away):
         return "REG"
 
-    # Pokud finalni vysledek nesedi na 60 minut, jde o OT nebo SO.
-    status_text = " ".join(
-        [event.get("ER", ""), event.get("E2", ""), event.get("AW", "")]
-    ).lower()
+    status_text = " ".join([event.get("ER", ""), event.get("E2", ""), event.get("AW", "")]).lower()
     if "sn" in status_text or "naje" in status_text:
         return "SO"
     return "OT"
@@ -440,7 +534,6 @@ def infer_live_period(event: Dict[str, str]) -> Optional[str]:
     if period_match:
         return f"{period_match.group(1)}T"
 
-    # Fallback podle dostupnych periodovych poli ve feedu.
     if "BE" in event or "BF" in event:
         return "3T"
     if "BC" in event or "BD" in event:
@@ -452,11 +545,11 @@ def infer_live_period(event: Dict[str, str]) -> Optional[str]:
 
 def fetch_livesport_results() -> List[Dict]:
     """
-    Stáhne výsledky zápasů z livesport.cz.
-    Vrací seznam slovníků: {"home": "FIN", "away": "GER", "score_home": 3, "score_away": 2, "type": "REG", "date": "2026-05-15", "time": "16:20"}
+    Stahne vysledky zapasu z livesport.cz.
+    Vraci seznam slovniku: {"home": "FIN", "away": "GER", "score_home": 3, "score_away": 2, "type": "REG", "date": "2026-05-15", "time": "16:20"}
     """
     results = []
-    
+
     try:
         print(f"[*] Stahuji data z {URL}...", file=sys.stderr)
         headers = {
@@ -483,12 +576,8 @@ def fetch_livesport_results() -> List[Dict]:
             seen_ids.add(event_id)
 
             event_state = detect_event_state(event)
-
-            # Zapasy jen s casem zacatku (nenarozhrane) ignorujeme.
             if event_state == "SCHEDULED":
                 continue
-
-            # Skore je jen u odehranych zapasu.
             if "AG" not in event or "AH" not in event:
                 continue
 
@@ -530,10 +619,8 @@ def fetch_livesport_results() -> List[Dict]:
                 }
             )
 
-        # tl_* feed vraci aktualni LIVE stavy (napr. 1. tretina 2:0),
-        # ktere nemusi byt v summary feedu.
         by_match_key = {
-            (m["home"], m["away"], m["date"], m["time"]): m for m in results
+            (match["home"], match["away"], match["date"], match["time"]): match for match in results
         }
         for live_match in live_matches:
             key = (live_match["home"], live_match["away"], live_match["date"], live_match["time"])
@@ -545,12 +632,12 @@ def fetch_livesport_results() -> List[Dict]:
 
         print(f"[*] Nalezeno {len(results)} zapasu", file=sys.stderr)
         return results
-    
-    except requests.RequestException as e:
-        print(f"[CHYBA] Nelze připojit na livesport.cz: {e}", file=sys.stderr)
+
+    except requests.RequestException as exc:
+        print(f"[CHYBA] Nelze pripojit na livesport.cz: {exc}", file=sys.stderr)
         return []
-    except Exception as e:
-        print(f"[CHYBA] Chyba při parsování: {e}", file=sys.stderr)
+    except Exception as exc:
+        print(f"[CHYBA] Chyba pri parsovani: {exc}", file=sys.stderr)
         return []
 
 

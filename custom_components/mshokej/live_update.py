@@ -95,9 +95,6 @@ def update_results_dataset(results, livesport_data, today=None):
             warnings.append(f"Zapas {home} vs {away}: nelze parsovat datum/cas")
             continue
 
-        if match_type == "LIVE":
-            feed_live_keys.add((home, away, date, time))
-
         match_index = find_match_index(working, home, away, date, time)
         if match_index == -1:
             warnings.append(f"Zapas {home} vs {away} ({date} {time}): nenalezen v results")
@@ -105,6 +102,8 @@ def update_results_dataset(results, livesport_data, today=None):
 
         match = working["matches"][match_index]
         match_id = match.get("id", "unknown")
+        if match_type == "LIVE":
+            feed_live_keys.add((match.get("home"), match.get("away"), match.get("date"), match.get("time")))
         if should_update_match(match, score_home, score_away, match_type, live_period, live_clock, live_status):
             match["score_home"] = score_home
             match["score_away"] = score_away
