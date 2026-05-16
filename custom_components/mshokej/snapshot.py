@@ -30,10 +30,36 @@ PERIOD_MAP = {
 
 
 def _is_played(match):
-    return match.get("score_home") is not None and match.get("score_away") is not None and match.get("type")
+    return (
+        match.get("score_home") is not None
+        and match.get("score_away") is not None
+        and match.get("type") in {"REG", "OT", "SO"}
+    )
+
+
+def _is_live(match):
+    return match.get("type") == "LIVE"
 
 
 def _result_parts(match):
+    if _is_live(match):
+        text = "LIVE"
+        if match.get("score_home") is not None and match.get("score_away") is not None:
+            text = f"{match['score_home']}:{match['score_away']}"
+
+        period_raw = (match.get("live_period") or "").strip()
+        live_phase = PERIOD_MAP.get(period_raw, period_raw or None)
+        live_clock = (match.get("live_clock") or "").strip()
+        live_status = (match.get("live_status") or "").strip()
+        live_sub = live_clock or live_status or None
+        return {
+            "text": text,
+            "suffix": None,
+            "live_phase": live_phase,
+            "live_sub": live_sub,
+            "type": "LIVE",
+        }
+
     if not _is_played(match):
         return {"text": "vs", "suffix": None, "live_phase": None, "live_sub": None, "type": None}
 
@@ -76,6 +102,7 @@ def _serialize_match(match, today, favorite_team):
         "is_today": match["date"] == today,
         "is_favorite_match": favorite_team in {match.get("home"), match.get("away")},
         "is_played": _is_played(match),
+        "is_live": _is_live(match),
         "result": _result_parts(match),
     }
 
@@ -182,8 +209,13 @@ def build_snapshot(
     now_iso = now.isoformat()
     today = now.strftime("%Y-%m-%d")
     ordered = sorted(working_matches, key=lambda match: (match["date"], match["time"], match["id"]))
+    live = [_serialize_match(match, today, favorite_team) for match in ordered if _is_live(match)]
     played = [_serialize_match(match, today, favorite_team) for match in ordered if _is_played(match)]
-    remaining = [_serialize_match(match, today, favorite_team) for match in ordered if not _is_played(match)]
+    remaining = [
+        _serialize_match(match, today, favorite_team)
+        for match in ordered
+        if not _is_played(match) and not _is_live(match)
+    ]
     nearest = remaining[:8]
 
     next_match = remaining[0] if remaining else None
@@ -200,8 +232,9 @@ def build_snapshot(
         },
         "overview": {
             "played": len(played),
+            "live": len(live),
             "total": len(working_matches),
-            "remaining": len(working_matches) - len(played),
+            "remaining": len(remaining),
             "group_total": sum(1 for match in working_matches if match.get("phase") == "group"),
             "group_played": sum(1 for match in working_matches if match.get("phase") == "group" and _is_played(match)),
         },
@@ -218,6 +251,7 @@ def build_snapshot(
             ],
         },
         "sections": {
+            "live": live,
             "nearest": nearest,
             "played": played,
             "remaining": remaining,
