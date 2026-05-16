@@ -5,6 +5,7 @@ from math import ceil
 DEFAULT_LIVE_POLL_INTERVAL = 60
 DEFAULT_PRE_MATCH_BUFFER = 60
 DEFAULT_IDLE_POLL_INTERVAL = 3600
+ONGOING_MATCH_WINDOW = 6 * 3600
 
 
 def has_live_matches(matches):
@@ -13,6 +14,7 @@ def has_live_matches(matches):
 
 def next_match_start(matches, now=None):
     current = now or datetime.now()
+    oldest_relevant_start = current - timedelta(seconds=ONGOING_MATCH_WINDOW)
     upcoming = []
 
     for match in matches:
@@ -26,7 +28,7 @@ def next_match_start(matches, now=None):
         except ValueError:
             continue
 
-        if start > current:
+        if start >= oldest_relevant_start:
             upcoming.append(start)
 
     return min(upcoming) if upcoming else None

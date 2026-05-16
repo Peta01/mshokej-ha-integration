@@ -144,6 +144,15 @@ class MSHokejDataCoordinator(DataUpdateCoordinator):
         }
         return payload
 
+    def _retry_refresh_plan(self, now):
+        next_refresh_at = now + timedelta(seconds=self.live_poll_interval)
+        return {
+            "mode": "retry",
+            "seconds": self.live_poll_interval,
+            "next_match_start": None,
+            "next_refresh_at": next_refresh_at,
+        }
+
     async def _async_update_data(self):
         await self._async_load_initial_results()
 
@@ -154,5 +163,30 @@ class MSHokejDataCoordinator(DataUpdateCoordinator):
             if self._results is None:
                 raise UpdateFailed(str(err)) from err
 
-            fallback_update = {"updated_matches": [], "warnings": [str(err)]}
-            return await self._async_build_payload(fallback_update, last_error=str(err))
+            now = datetime.now()
+            refresh_plan = self._retry_refresh_plan(now)
+            snapshot = await self.hass.async_add_executor_job(
+                build_snapshot,
+                self._results["matches"],
+                self.title,
+                self.favorite_team,
+                now,
+                refresh_plan["mode"],
+                refresh_plan["seconds"],
+                refresh_plan["next_refresh_at"],
+            )
+            self.update_interval = timedelta(seconds=max(1, int(refresh_plan["seconds"])))
+
+            return {
+                ATTR_SNAPSHOT: snapshot,
+                ATTR_REFRESH_PLAN: {
+                    "mode": refresh_plan["mode"],
+                    "seconds": refresh_plan["seconds"],
+                    "next_match_start": None,
+                    "next_refresh_at": refresh_plan["next_refresh_at"].isoformat(),
+                },
+                ATTR_LAST_UPDATE: snapshot["meta"]["generated_at"],
+                ATTR_UPDATED_MATCHES: [],
+                ATTR_WARNINGS: [str(err)],
+                "last_error": str(err),
+            }

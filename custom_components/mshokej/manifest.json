@@ -1,7 +1,7 @@
 {
   "domain": "mshokej",
   "name": "MS Hokej",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "config_flow": true,
   "requirements": [
     "requests>=2.31.0"
