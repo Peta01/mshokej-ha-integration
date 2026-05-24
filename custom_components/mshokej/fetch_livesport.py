@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 import requests
 
 URL = "https://www.livesport.cz/hokej/svet/mistrovstvi-sveta/live-tabulka/"
+RESULTS_URL = "https://www.livesport.cz/hokej/svet/mistrovstvi-sveta/vysledky/"
 
 TEAM_MAPPING = {
     "kanada": "CAN",
@@ -36,6 +37,17 @@ TEAM_MAPPING = {
     "kazachstan": "KAZ", "kazachstanu": "KAZ", "kazakhstan": "KAZ",
     "švédsko": "SWE", "svedsko": "SWE", "svenska": "SWE", "sveska": "SWE", "svedsku": "SWE",
 }
+
+TEAM_CODE_ALIASES = {
+    "CES": "CZE",
+    "SVE": "SWE",
+    "SVY": "SUI",
+    "NEM": "GER",
+    "KAN": "CAN",
+    "DAN": "DEN",
+}
+
+KNOWN_TEAM_CODES = set(TEAM_MAPPING.values())
 
 
 def parse_tl_live_feed_events(feed_text: str) -> List[Dict[str, str]]:
@@ -364,6 +376,9 @@ def fetch_live_table_matches(page_html: str, headers: Dict[str, str]) -> List[Di
         has_authoritative_status = page_status in {"Přestávka", "Konec"}
         if page_period:
             live_period = page_period
+        elif page_status == "Přestávka":
+            # Pri oficialni prestavce z detailu zapasu neukazujeme zastaralou tretinu z tl_* feedu.
+            live_period = None
         if page_clock:
             live_clock = page_clock
         if page_status:
@@ -477,6 +492,58 @@ def parse_feed_events(page_html: str, feed_name: str) -> List[Dict[str, str]]:
     return events
 
 
+def parse_embedded_events(page_html: str) -> List[Dict[str, str]]:
+    """Vyparsuje vsechny eventy z embedded token streamu v HTML (fallback)."""
+    item_separator = chr(172)
+    key_separator = chr(247)
+    events: List[Dict[str, str]] = []
+    current: Optional[Dict[str, str]] = None
+
+    for token in page_html.split(item_separator):
+        if key_separator not in token:
+            continue
+
+        key, value = token.split(key_separator, 1)
+        key = key.lstrip("~")
+
+        if key == "AA":
+            if current:
+                events.append(current)
+            current = {}
+
+        if current is not None:
+            current[key] = value
+
+    if current:
+        events.append(current)
+
+    return events
+
+
+def normalize_team_code(raw_code: str) -> Optional[str]:
+    if not raw_code:
+        return None
+    normalized = TEAM_CODE_ALIASES.get(raw_code.upper().strip(), raw_code.upper().strip())
+    if normalized in KNOWN_TEAM_CODES:
+        return normalized
+    return None
+
+
+def get_event_team_codes(event: Dict[str, str]) -> tuple[Optional[str], Optional[str]]:
+    home_code = normalize_team_code(event.get("WM") or "")
+    away_code = normalize_team_code(event.get("WN") or "")
+
+    if not home_code:
+        home_name = event.get("AE") or event.get("CX", "")
+        home_code = normalize_team_name(home_name)
+
+    if not away_code:
+        away_name = event.get("AF", "")
+        away_code = normalize_team_name(away_name)
+
+    return home_code, away_code
+
+
 def parse_match_type_from_periods(event: Dict[str, str], score_home: int, score_away: int) -> str:
     """Urci typ zapasu podle period skore; fallback je REG."""
     regulation_home = 0
@@ -548,6 +615,26 @@ def fetch_livesport_results() -> List[Dict]:
 
         results_events = parse_feed_events(response.text, "summary-results")
         fixtures_events = parse_feed_events(response.text, "summary-fixtures")
+
+        # live-tabulka muze mit docasne nekompletni summary-results; doplnime je z vysledky.
+        results_events_by_id = {
+            event.get("AA"): event for event in results_events if event.get("AA")
+        }
+        try:
+            results_response = requests.get(RESULTS_URL, headers=headers, timeout=10)
+            results_response.raise_for_status()
+            results_page_events = parse_feed_events(results_response.text, "summary-results")
+            embedded_events = parse_embedded_events(results_response.text)
+            for event in (results_page_events + embedded_events):
+                event_id = event.get("AA")
+                if not event_id or event_id in results_events_by_id:
+                    continue
+                results_events.append(event)
+                results_events_by_id[event_id] = event
+        except requests.RequestException:
+            # Fallback je best-effort; pri chybe zustaneme u live-tabulka feedu.
+            pass
+
         events = results_events + fixtures_events
         live_matches = fetch_live_table_matches(response.text, headers)
         print(
@@ -575,10 +662,7 @@ def fetch_livesport_results() -> List[Dict]:
             except ValueError:
                 continue
 
-            home_name = event.get("AE") or event.get("CX", "")
-            away_name = event.get("AF", "")
-            home_code = normalize_team_name(home_name)
-            away_code = normalize_team_name(away_name)
+            home_code, away_code = get_event_team_codes(event)
             if not home_code or not away_code:
                 continue
 
